@@ -199,6 +199,27 @@ export function SenderPage() {
     }
   }
 
+  const [fsControls, setFsControls] = useState(true);
+  useEffect(() => {
+    if (!fullscreen) return;
+    let t: number | undefined;
+    const show = () => {
+      setFsControls(true);
+      clearTimeout(t);
+      t = window.setTimeout(() => setFsControls(false), 2500);
+    };
+    show();
+    const onMove = () => show();
+    const onDown = () => show();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerdown", onDown);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerdown", onDown);
+    };
+  }, [fullscreen]);
+
   function exitFullscreen() {
     if (document.fullscreenElement) void document.exitFullscreen();
     setFullscreen(false);
@@ -232,6 +253,9 @@ export function SenderPage() {
             background: "rgba(0,0,0,0.55)",
             backdropFilter: "blur(6px)",
             fontSize: "0.85rem",
+            opacity: fsControls ? 1 : 0,
+            pointerEvents: fsControls ? "auto" : "none",
+            transition: "opacity 200ms ease",
           }}
         >
           <span className="muted">
@@ -241,6 +265,24 @@ export function SenderPage() {
             Exit
           </button>
         </div>
+        <button
+          onClick={exitFullscreen}
+          className="ghost"
+          title="Exit fullscreen"
+          aria-label="Exit fullscreen"
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 12,
+            opacity: fsControls ? 0 : 0.55,
+            pointerEvents: fsControls ? "none" : "auto",
+            transition: "opacity 200ms ease",
+            padding: "4px 10px",
+            fontSize: "0.75rem",
+          }}
+        >
+          Exit
+        </button>
       </div>
     );
   }
