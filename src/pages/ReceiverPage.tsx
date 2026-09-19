@@ -145,15 +145,18 @@ export function ReceiverPage() {
     setResult(null);
     setStatus({ stage: "scanning" });
     statusRef.current = { stage: "scanning" };
+    if (!window.isSecureContext) {
+      setCamError(
+        "Blocked: camera requires a secure context. Open this page over HTTPS (or localhost), not plain HTTP."
+      );
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCamError("Camera API unavailable — use HTTPS or localhost.");
+      setCamError("Camera API unavailable in this browser.");
       return;
     }
     try {
-      const stream = navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1440 } },
-        audio: false,
-      });
+      const stream = requestCameraStream();
       // Let streams abort if the component unmounts mid-request.
       const timeout = setTimeout(() => {
         void stream.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
@@ -168,13 +171,38 @@ export function ReceiverPage() {
       }
       v.srcObject = s;
       await v.play();
+      if (!v.videoWidth) {
+        await new Promise<void>((resolve) => {
+          v.addEventListener("loadedmetadata", () => resolve(), { once: true });
+          setTimeout(resolve, 2000);
+        });
+      }
       setRunning(true);
     } catch (e) {
       setCamError(
-        "Camera unavailable or permission denied: " +
-          (e instanceof Error ? e.message : String(e))
+        "Camera unavailable or permission denied. " +
+          (e instanceof Error ? e.message : String(e)) +
+          " — allow camera access, or try mirroring the back camera on your phone."
       );
     }
+  }
+
+  function requestCameraStream(): Promise<MediaStream> {
+    const backCam = {
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1440 },
+      },
+      audio: false,
+    };
+    const anyCam = { video: { width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false };
+    return navigator.mediaDevices.getUserMedia(backCam).catch((err: DOMException) => {
+      if (err.name === "OverconstrainedError" || err.name === "NotFoundError" || err.name === "TypeError") {
+        return navigator.mediaDevices.getUserMedia(anyCam);
+      }
+      throw err;
+    });
   }
 
   function stopCamera() {
