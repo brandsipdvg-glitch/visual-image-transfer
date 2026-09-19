@@ -8,7 +8,7 @@ import type {
   DecodeStatusMessage,
 } from "../lib/workers/types";
 
-const CAP_WIDTH_AUTO = 1280; // per-frame loop, keeps decode worker responsive
+const CAP_WIDTH_AUTO = 1600; // per-frame loop, keeps decode worker responsive
 
 export function ReceiverPage() {
   const workerRef = useRef<InstanceType<typeof DecodeWorker> | null>(null);

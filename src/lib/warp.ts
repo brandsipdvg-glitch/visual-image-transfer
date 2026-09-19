@@ -70,10 +70,147 @@ export function transformQuad(m: Mat3, quad: P2[]): P2[] {
   return quad.map((p) => applyH(m, p));
 }
 
-function normalizeMat(m: Mat3): Mat3 {
+export function normalizeMat(m: Mat3): Mat3 {
   const n = Math.sqrt(m.reduce((s, v) => s + v * v, 0));
   if (n < 1e-9) return m;
   return m.map((v) => v / n);
+}
+
+export function matMul3(a: Mat3, b: Mat3): Mat3 {
+  return [
+    a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+    a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+    a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+    a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+    a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+    a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+    a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+    a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+    a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+  ];
+}
+
+// Inverse of a 3x3 matrix represented in homogeneous 2D (bottom row 0,0,1 or
+// any invertible value). Throws on singularity.
+export function invertMat3(m: Mat3): Mat3 {
+  const a = m[0], b = m[1], c = m[2];
+  const d = m[3], e = m[4], f = m[5];
+  const g = m[6], h = m[7], i = m[8];
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-12) throw new Error("singular 3x3");
+  const inv = 1 / det;
+  return [
+    (e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv,
+    (f * g - d * i) * inv, (a * i - c * g) * inv, (c * d - a * f) * inv,
+    (d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv,
+  ];
+}
+
+// Smallest-eigenvalue eigenvector of a symmetric n x n matrix via Jacobi
+// rotations. Deterministic; returns unit vector in the null-ish direction of M.
+function smallestEigenvectorSym(M: number[][], n: number): number[] {
+  const v: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    v.push(new Array<number>(n).fill(0));
+    v[i][i] = 1;
+  }
+  let off = Infinity;
+  let guard = 0;
+  while (off > 1e-10 && guard++ < 200) {
+    off = 0;
+    let p = 0, q = 1, maxAbs = -1;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = Math.abs(M[i][j]);
+        if (a > maxAbs) { maxAbs = a; p = i; q = j; }
+      }
+    }
+    off = maxAbs;
+    if (off < 1e-10) break;
+    const theta = (M[q][q] - M[p][p]) / (2 * M[p][q]);
+    const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+    const c = 1 / Math.sqrt(t * t + 1);
+    const s = t * c;
+    for (let k = 0; k < n; k++) {
+      const mkp = M[k][p], mkq = M[k][q];
+      M[k][p] = c * mkp - s * mkq;
+      M[k][q] = s * mkp + c * mkq;
+    }
+    for (let k = 0; k < n; k++) {
+      const mpk = M[p][k], mqk = M[q][k];
+      M[p][k] = c * mpk - s * mqk;
+      M[q][k] = s * mpk + c * mqk;
+      const vpk = v[k][p], vqk = v[k][q];
+      v[k][p] = c * vpk - s * vqk;
+      v[k][q] = s * vpk + c * vqk;
+    }
+  }
+  // Column with smallest diagonal (eigenvalue).
+  let col = 0;
+  for (let i = 1; i < n; i++) if (M[i][i] < M[col][col]) col = i;
+  return v.map((r) => r[col]);
+}
+
+// Least-squares homography from N (>=4) source->dst point correspondences via
+// normalized DLT (min ||Ah|| s.t. ||h||=1, in normalized coordinates). Returns
+// the 3x3 mapping so that applyH(H, p) ~= dst for homogeneous-affine use.
+// `weights` optionally scales each correspondence's contribution (higher =
+// trusted more), useful when some points are noisier than others.
+export function solveHomographyLS(
+  src: P2[],
+  dst: P2[],
+  weights?: number[]
+): Mat3 {
+  if (src.length < 4 || dst.length < 4 || src.length !== dst.length) {
+    throw new Error("solveHomographyLS requires >=4 matching correspondences");
+  }
+  const n = src.length;
+  const wt = weights ?? new Array<number>(n).fill(1);
+  if (wt.length !== n) throw new Error("weights length mismatch");
+  const ws = wt.map((x) => Math.sqrt(x));
+  // Normalizing transforms (translate to centroid, scale to mean dist ~1).
+  const csx = src.reduce((s, p) => s + p.x, 0) / n;
+  const csy = src.reduce((s, p) => s + p.y, 0) / n;
+  const sds = src.reduce((s, p) => s + Math.hypot(p.x - csx, p.y - csy), 0) / n || 1;
+  const ctx = dst.reduce((s, p) => s + p.x, 0) / n;
+  const cty = dst.reduce((s, p) => s + p.y, 0) / n;
+  const dds = dst.reduce((s, p) => s + Math.hypot(p.x - ctx, p.y - cty), 0) / n || 1;
+  // A is n*2 x 9 (homogeneous DLT rows, scaled by sqrt(weight)).
+  const A: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const x = (src[i].x - csx) / sds;
+    const y = (src[i].y - csy) / sds;
+    const u = (dst[i].x - ctx) / dds;
+    const v = (dst[i].y - cty) / dds;
+    const sw = ws[i];
+    A.push([x * sw, y * sw, sw, 0, 0, 0, -u * x * sw, -u * y * sw, -u * sw]);
+    A.push([0, 0, 0, x * sw, y * sw, sw, -v * x * sw, -v * y * sw, -v * sw]);
+  }
+  // AtA (9x9).
+  const AtA: number[][] = [];
+  for (let i = 0; i < 9; i++) {
+    const row = new Array<number>(9).fill(0);
+    for (let j = 0; j < 9; j++) {
+      let s = 0;
+      for (let k = 0; k < n * 2; k++) s += A[k][i] * A[k][j];
+      row[j] = s;
+    }
+    AtA.push(row);
+  }
+  const ev = smallestEigenvectorSym(AtA, 9);
+  const h = ev as Mat3; // H': norm(src) -> norm(dst), row-major 3x3
+  const ns = [
+    1 / sds, 0, -csx / sds,
+    0, 1 / sds, -csy / sds,
+    0, 0, 1,
+  ];
+  const ndInv = [
+    dds, 0, ctx,
+    0, dds, cty,
+    0, 0, 1,
+  ];
+  // H = Nd^-1 * H' * Ns  (maps raw src -> raw dst).
+  return matMul3(ndInv, matMul3(h, ns));
 }
 
 export interface RenderOptions {
@@ -115,16 +252,19 @@ export function renderRect(
     }
     return out;
   }
-  // supersample
+  // supersample: sample points inside the central band of each dest pixel
+  // (offset 0.25..0.75 of the pixel). For big cells this stays away from cell
+  // edges (no bleed); for small cells it area-averages sensor noise.
   const acc = new Float32Array(3);
   for (let y = 0; y < dstH; y++) {
     for (let x = 0; x < dstW; x++) {
       acc[0] = acc[1] = acc[2] = 0;
       for (let sy = 0; sy < ss; sy++) {
         for (let sx = 0; sx < ss; sx++) {
+          const off = 0.25 + 0.5 * ((sx + 0.5) / ss);
           const p = applyH(Hi, {
-            x: x + (sx + 0.5) / ss,
-            y: y + (sy + 0.5) / ss,
+            x: x + off,
+            y: y + (0.25 + 0.5 * ((sy + 0.5) / ss)),
           });
           const tmp = new Uint8ClampedArray(4);
           sample(src, srcW, srcH, p.x, p.y, tmp, 0);

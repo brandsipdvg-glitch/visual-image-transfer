@@ -34,6 +34,26 @@ export const GEOM = {
   finderSize: 0.1,
 } as const;
 
+// Fraction of S from each frame OUTER corner to a finder center (finders sit
+// in the margin band, centered between the frame inner edge and the data rect).
+export const FINDER_CFRAC = GEOM.frameThickness + GEOM.dataInset / 2;
+
+// Canonical-square coordinates (side S) of the finder markers. The three big
+// QR-style markers anchor TL/TR/BL (the QR language); two smaller alignment
+// markers at bottom-center and right-center pin the edges near the metadata
+// block in the bottom-right margin, which otherwise is the least constrained
+// corner of the projective frame.
+export function finderCanonicalCenters(S: number): P2[] {
+  const c = FINDER_CFRAC * S;
+  return [
+    { x: c, y: c }, // top-left (QR)
+    { x: S - c, y: c }, // top-right (QR)
+    { x: c, y: S - c }, // bottom-left (QR)
+    { x: S - c, y: S / 2 }, // right-center alignment marker
+    { x: S / 2, y: S - c }, // bottom-center alignment marker
+  ];
+}
+
 export interface GeometryRects {
   frameOuter: P2[]; // square corners, clockwise from top-left
   frameInner: P2[];
@@ -207,17 +227,11 @@ export function composeDisplay(
   const mRect = rects.metaRect.map((p) => ({ x: cx + p.x, y: cy + p.y }));
   drawMetaBlock(out, winW, winH, metaMatrix, mRect);
 
-  // QR-style finder markers at the TL / TR / BL corners of the data rect,
-  // centered on the black margin band between the frame ring and the data.
-  const cFrac = GEOM.frameThickness + GEOM.dataInset / 2;
+  // Finder markers at TL / TR / BL (QR style) plus two edge alignment markers
+  // at bottom-center / right-center, all centered on the black margin band.
   const finderHalf = (GEOM.finderSize / 2) * S;
-  const finderCenters = [
-    { x: cx + cFrac * S, y: cy + cFrac * S },
-    { x: cx + S - cFrac * S, y: cy + cFrac * S },
-    { x: cx + cFrac * S, y: cy + S - cFrac * S },
-  ];
-  for (const fc of finderCenters) {
-    drawFinder(out, winW, winH, fc.x, fc.y, finderHalf);
+  for (const fc of finderCanonicalCenters(S)) {
+    drawFinder(out, winW, winH, cx + fc.x, cy + fc.y, finderHalf);
   }
 
   return out;

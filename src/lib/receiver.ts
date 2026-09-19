@@ -10,6 +10,7 @@ import {
 } from "./warp";
 import { META_GRID, readMetaMatrix } from "./meta";
 import { decodeImage, type DecodeResult } from "./decode";
+import { refineFrameQuad } from "./finder";
 
 export type FrameStatus =
   | { stage: "scanning" }
@@ -69,11 +70,37 @@ export async function processFrame(
   input: ProcessFrameInput
 ): Promise<FrameStatus> {
   const { rgba, width, height, key } = input;
-
   const det = detectFrame(rgba, width, height);
   if (!det) return { stage: "scanning" };
+  const { status } = await processFrameWithQuad(
+    { ...input, width, height, key },
+    det.quad
+  );
+  return status;
+}
 
-  const toCam = canonicalToCamera(det.quad);
+// Process a frame using a supplied (possibly coarse) frame quad instead of
+// running detection. Refines it via the QR markers when possible and reports
+// which quad was actually used — handy for tests and debug overlays.
+export async function processFrameWithQuad(
+  input: ProcessFrameInput,
+  coarseQuad: P2[]
+): Promise<{ status: FrameStatus; quad: P2[]; refined: boolean }> {
+  const { rgba, width, height, key } = input;
+  return processInner(rgba, width, height, key, coarseQuad);
+}
+
+async function processInner(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  key: string,
+  coarseQuad: P2[]
+): Promise<{ status: FrameStatus; quad: P2[]; refined: boolean }> {
+  // Register the frame sub-pixel using the QR finder markers; fall back to the
+  // coarse white-frame quad when the markers are not found (e.g. old captures).
+  const refinedQuad = refineFrameQuad(rgba, width, height, coarseQuad);
+  const toCam = canonicalToCamera(refinedQuad ?? coarseQuad);
   const rects = buildRects(CANONICAL);
   const dataRectCam = rects.dataRect.map(toCam);
   const metaRectCam = rects.metaRect.map(toCam);
@@ -84,10 +111,12 @@ export async function processFrame(
   const meta = readMetaMatrix(lum);
 
   if (!meta) {
-    return { stage: "screen", quad: det.quad };
+    return { status: { stage: "screen", quad: coarseQuad }, quad: refinedQuad ?? coarseQuad, refined: refinedQuad !== null };
   }
 
-  // Register the data rect into the padded canvas and decode.
+  // Register the data rect into the padded canvas and decode. Supersampling
+  // area-averages several sensor pixels per content cell, suppressing the
+  // per-pixel noise that otherwise flips a cell's quantized value.
   const data = renderRect(
     rgba,
     width,
@@ -95,7 +124,7 @@ export async function processFrame(
     dataRectCam,
     meta.pw,
     meta.ph,
-    { supersample: 1 }
+    { supersample: 2 }
   );
 
   const result: DecodeResult = await decodeImage({
@@ -111,18 +140,23 @@ export async function processFrame(
 
   if (result.ok) {
     return {
-      stage: "decoded",
-      result: {
-        rgba: result.rgba,
-        width: result.width,
-        height: result.height,
-        quality: result.quality,
+      status: {
+        stage: "decoded",
+        result: {
+          rgba: result.rgba,
+          width: result.width,
+          height: result.height,
+          quality: result.quality,
+        },
       },
+      quad: refinedQuad ?? coarseQuad,
+      refined: refinedQuad !== null,
     };
   }
   return {
-    stage: "failed",
-    reason: result.reason,
+    status: { stage: "failed", reason: result.reason },
+    quad: refinedQuad ?? coarseQuad,
+    refined: refinedQuad !== null,
   };
 }
 

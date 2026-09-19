@@ -27,7 +27,9 @@ The fullscreen host renders, on a black background, a white square frame
 
 - a large central noise region (the padded encoded canvas stretched in),
 - three QR-style finder markers at the top-left, top-right and bottom-left
-  corners of the noise region (scan affordance, like aligning a QR code),
+  corners of the noise region plus two small alignment markers at
+  bottom-center / right-center (these pin the edges near the metadata block;
+  the receiver uses them to re-register the frame to sub-pixel accuracy),
 - a 32×32 metadata block in the bottom-right margin (padded dims, content
   size, CRC32 + 4× CRC16 group digests, 3× redundancy).
 
