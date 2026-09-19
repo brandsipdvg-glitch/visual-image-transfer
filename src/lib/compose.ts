@@ -5,7 +5,9 @@
 //   - black background
 //   - a white FRAME square (detection anchor) of side S (S = min(winW, winH))
 //   - the encoded noise canvas stretched into the central "data rect"
-//   - a metadata block in the top-left margin (never scrambled)
+//   - three QR-style FINDER markers at the top-left, top-right and bottom-left
+//     corners of the data rect (scan affordance + future alignment aid)
+//   - a metadata block in the bottom-right margin (never scrambled)
 //
 // All positions are FRACTIONS of S, so a sender window of any size and a
 // receiver canonical square always agree.
@@ -17,18 +19,19 @@ export const CANONICAL = 1200; // receiver warps the frame to this square
 export const GEOM = {
   // Frame: white border thickness as fraction of S.
   frameThickness: 0.02,
-  // Black margin between the frame inner edge and the data rect. The metadata
-  // block sits on this band (see metaSize/metaOffset), so the data region stays
-  // pristine -- the receiver never has to read come under an overlay.
-  dataInset: 0.28,
-  // Metadata block: top-left corner offset from frame OUTER edge, placed in
-  // the black margin between the frame ring and the data rect so it never
-  // paints over the detection frame. Sized generously (24% of the frame) so
-  // each cell is several source pixels after perspective + camera downscale.
-  metaSize: 0.24,
-  // Offset just inside the frame inner edge (frameThickness) so the block
-  // sits fully on the black margin band.
-  metaOffset: 0.03,
+  // Black margin between the frame inner edge and the data rect. Small enough
+  // that the encoded image fills most of the frame, yet wide enough to carry
+  // the corner markers and the metadata block bands.
+  dataInset: 0.18,
+  // Metadata block: a square placed in the bottom-right margin (gap from the
+  // frame INNER edge = metaOffset); sized generously so each grid cell is
+  // several source pixels after perspective + camera downscale.
+  metaSize: 0.15,
+  // Gap between frame inner edge and the metadata block / corner markers.
+  metaOffset: 0.02,
+  // Side of each QR-style corner finder marker (full 7-module pattern) as
+  // fraction of S: outer black ring, inner white ring, black center.
+  finderSize: 0.1,
 } as const;
 
 export interface GeometryRects {
@@ -45,7 +48,7 @@ export function buildRects(S: number): GeometryRects {
   const f = GEOM.frameThickness * S;
   const inset = GEOM.dataInset * S;
   const mSize = GEOM.metaSize * S;
-  const mOff = GEOM.metaOffset * S;
+  const mGap = GEOM.metaOffset * S;
 
   const frameOuter: P2[] = [
     { x: 0, y: 0 },
@@ -65,11 +68,13 @@ export function buildRects(S: number): GeometryRects {
     { x: S - f - inset, y: S - f - inset },
     { x: f + inset, y: S - f - inset },
   ];
+  // Metadata: bottom-right corner, inset from the frame inner edge by mGap.
+  const mTL = S - f - mGap - mSize;
   const metaRect: P2[] = [
-    { x: mOff, y: mOff },
-    { x: mOff + mSize, y: mOff },
-    { x: mOff + mSize, y: mOff + mSize },
-    { x: mOff, y: mOff + mSize },
+    { x: mTL, y: mTL },
+    { x: mTL + mSize, y: mTL },
+    { x: mTL + mSize, y: mTL + mSize },
+    { x: mTL, y: mTL + mSize },
   ];
   return {
     frameOuter,
@@ -115,6 +120,37 @@ export function drawMetaBlock(
 
 function clampInt(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+// QR-style finder marker: a 7-module pattern of outer black ring, white inner
+// ring, black center (the classic QR position/square eye). Drawn into a black
+// margin so it never touches the data or the white frame.
+export function drawFinder(
+  dst: Uint8ClampedArray,
+  dstW: number,
+  dstH: number,
+  cx: number,
+  cy: number,
+  half: number
+): void {
+  const x0 = Math.max(0, Math.ceil(cx - half));
+  const x1 = Math.min(dstW, Math.floor(cx + half));
+  const y0 = Math.max(0, Math.ceil(cy - half));
+  const y1 = Math.min(dstH, Math.floor(cy + half));
+  const m = (half * 2) / 7;
+  for (let sy = y0; sy <= y1; sy++) {
+    const my = Math.floor((sy + 0.5 - (cy - half)) / m);
+    for (let sx = x0; sx <= x1; sx++) {
+      const mx = Math.floor((sx + 0.5 - (cx - half)) / m);
+      if (mx < 0 || mx > 6 || my < 0 || my > 6) continue;
+      const dark =
+        mx === 0 || mx === 6 || my === 0 || my === 6 || (mx >= 2 && mx <= 4 && my >= 2 && my <= 4);
+      const i = (sy * dstW + sx) * 4;
+      const v = dark ? 0 : 255;
+      dst[i] = dst[i + 1] = dst[i + 2] = v;
+      dst[i + 3] = 255;
+    }
+  }
 }
 
 // Compose the fullscreen display image (window of size winW x winH).
@@ -167,9 +203,22 @@ export function composeDisplay(
     }
   }
 
-  // Metadata block (offset by cx/cy since rects are in square coords).
+  // Metadata block (bottom-right margin; rects are in square coords).
   const mRect = rects.metaRect.map((p) => ({ x: cx + p.x, y: cy + p.y }));
   drawMetaBlock(out, winW, winH, metaMatrix, mRect);
+
+  // QR-style finder markers at the TL / TR / BL corners of the data rect,
+  // centered on the black margin band between the frame ring and the data.
+  const cFrac = GEOM.frameThickness + GEOM.dataInset / 2;
+  const finderHalf = (GEOM.finderSize / 2) * S;
+  const finderCenters = [
+    { x: cx + cFrac * S, y: cy + cFrac * S },
+    { x: cx + S - cFrac * S, y: cy + cFrac * S },
+    { x: cx + cFrac * S, y: cy + S - cFrac * S },
+  ];
+  for (const fc of finderCenters) {
+    drawFinder(out, winW, winH, fc.x, fc.y, finderHalf);
+  }
 
   return out;
 }

@@ -23,11 +23,13 @@ link.
 ## The on-screen format
 
 The fullscreen host renders, on a black background, a white square frame
-(detection anchor). Inside:
+(detection anchor). Inside, filling most of the frame:
 
-- a central noise region (the padded encoded canvas stretched in),
-- a 32×32 metadata block in the top-left margin (padded dims, content size,
-  CRC32 + 4× CRC16 group digests, 3× redundancy).
+- a large central noise region (the padded encoded canvas stretched in),
+- three QR-style finder markers at the top-left, top-right and bottom-left
+  corners of the noise region (scan affordance, like aligning a QR code),
+- a 32×32 metadata block in the bottom-right margin (padded dims, content
+  size, CRC32 + 4× CRC16 group digests, 3× redundancy).
 
 The receiver detects the white frame (threshold + connected components +
 convex hull + sub-pixel edge refinement), reads the metadata cells through the
