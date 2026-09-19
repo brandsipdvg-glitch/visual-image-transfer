@@ -7,7 +7,8 @@ import type {
   DecodeStatusMessage,
 } from "../lib/workers/types";
 
-const CAP_WIDTH = 1280;
+const CAP_WIDTH_AUTO = 1280; // per-frame loop, keeps decode worker responsive
+const CAP_WIDTH_FULL = 1920; // manual single-shot capture, max detail
 
 export function ReceiverPage() {
   const workerRef = useRef<InstanceType<typeof DecodeWorker> | null>(null);
@@ -16,11 +17,14 @@ export function ReceiverPage() {
   const captureRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef(false);
+  const queuedRef = useRef(false);
+  const sendFrameRef = useRef<(maxW: number) => void>(() => {});
   const rafRef = useRef<number>(0);
   const statusRef = useRef<DecodeStageStatus>({ stage: "scanning" });
 
   const [key, setKey] = useState(() => localStorage.getItem("vit-key") ?? "");
   const [running, setRunning] = useState(false);
+  const [capturing, setCapturing] = useState(false);
   const [camError, setCamError] = useState<string | null>(null);
   const [status, setStatus] = useState<DecodeStageStatus>({ stage: "scanning" });
   const [result, setResult] = useState<{ width: number; height: number; quality: number; rgba: Uint8ClampedArray } | null>(null);
@@ -85,6 +89,8 @@ export function ReceiverPage() {
       const d = ev.data;
       if (d.type === "busy") {
         pendingRef.current = false;
+        setCapturing(false);
+        drainQueuedCapture();
         return;
       }
       if (d.type === "decoded") {
@@ -96,11 +102,15 @@ export function ReceiverPage() {
         });
         setStatus({ stage: "decoded", width: d.width, height: d.height, quality: d.quality });
         pendingRef.current = false;
+        setCapturing(false);
+        drainQueuedCapture();
         return;
       }
       statusRef.current = d.status;
       setStatus(d.status);
       pendingRef.current = false;
+      setCapturing(false);
+      drainQueuedCapture();
     };
     w.addEventListener("message", onMsg);
     return () => {
@@ -109,36 +119,57 @@ export function ReceiverPage() {
     };
   }, []);
 
-  const capture = useCallback(() => {
-    const v = videoRef.current;
-    const cap = captureRef.current;
-    const w = workerRef.current;
-    if (!v || !cap || !w || pendingRef.current) return;
-    if (v.readyState < 2 || !v.videoWidth) return;
+  const sendFrame = useCallback(
+    (maxW: number) => {
+      const v = videoRef.current;
+      const cap = captureRef.current;
+      const w = workerRef.current;
+      if (!v || !cap || !w) return;
+      if (v.readyState < 2 || !v.videoWidth) return;
 
-    const scale = Math.min(1, CAP_WIDTH / v.videoWidth);
-    const cw = Math.max(2, Math.round(v.videoWidth * scale));
-    const ch = Math.max(2, Math.round(v.videoHeight * scale));
-    if (cap.width !== cw) cap.width = cw;
-    if (cap.height !== ch) cap.height = ch;
-    const ctx = cap.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-    ctx.drawImage(v, 0, 0, cw, ch);
-    const img = ctx.getImageData(0, 0, cw, ch);
-    const buf = transferClone(img.data);
-    pendingRef.current = true;
-    w.postMessage({ type: "frame", rgba: buf, width: cw, height: ch, key }, [buf]);
-  }, [key]);
+      const scale = Math.min(1, maxW / v.videoWidth);
+      const cw = Math.max(2, Math.round(v.videoWidth * scale));
+      const ch = Math.max(2, Math.round(v.videoHeight * scale));
+      if (cap.width !== cw) cap.width = cw;
+      if (cap.height !== ch) cap.height = ch;
+      const ctx = cap.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(v, 0, 0, cw, ch);
+      const img = ctx.getImageData(0, 0, cw, ch);
+      pendingRef.current = true;
+      const buf = transferClone(img.data);
+      w.postMessage({ type: "frame", rgba: buf, width: cw, height: ch, key }, [buf]);
+    },
+    [key]
+  );
+  sendFrameRef.current = sendFrame;
+
+  // A manually-requested capture that arrived while the worker was still busy
+  // gets retried once the worker reports back.
+  function drainQueuedCapture() {
+    if (queuedRef.current) {
+      queuedRef.current = false;
+      sendFrameRef.current(CAP_WIDTH_FULL);
+    }
+  }
+
+  function onManualCapture() {
+    if (!running) return;
+    setResult(null);
+    queuedRef.current = true;
+    setCapturing(true);
+    if (!pendingRef.current) sendFrame(CAP_WIDTH_FULL);
+  }
 
   useEffect(() => {
     if (!running) return;
     const loop = () => {
-      capture();
+      if (!queuedRef.current && !pendingRef.current) sendFrame(CAP_WIDTH_AUTO);
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, capture]);
+  }, [running, sendFrame]);
 
   async function startCamera() {
     setCamError(null);
@@ -241,9 +272,14 @@ export function ReceiverPage() {
         <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Receive with camera</h2>
         <span style={{ flex: 1 }} />
         {running && (
-          <button onClick={stopCamera} className="ghost">
-            Stop
-          </button>
+          <>
+            <button className="primary" disabled={capturing} onClick={onManualCapture}>
+              {capturing ? "Decoding frame…" : "Capture & decode"}
+            </button>
+            <button onClick={stopCamera} className="ghost">
+              Stop
+            </button>
+          </>
         )}
       </header>
 
