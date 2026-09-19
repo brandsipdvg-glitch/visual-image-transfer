@@ -4,6 +4,7 @@ import type { EncodeResponse } from "../lib/workers/types";
 import { composeDisplay } from "../lib/compose";
 import { buildMetaMatrix, makePayload } from "../lib/meta";
 import { wrapImageData, transferClone } from "../lib/imageData";
+import { DEFAULT_KEY } from "../lib/config";
 
 const MAX_DIM = 320;
 
@@ -50,7 +51,6 @@ export function SenderPage() {
   const fsWrapRef = useRef<HTMLDivElement | null>(null);
   const fsCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const [key, setKey] = useState(() => localStorage.getItem("vit-key") ?? "");
   const [src, setSrc] = useState<{ width: number; height: number } | null>(null);
   const [encoded, setEncoded] = useState<Encoded | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,10 +81,6 @@ export function SenderPage() {
       w.terminate();
     };
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("vit-key", key);
-  }, [key]);
 
   async function pickFile(file: File) {
     try {
@@ -129,7 +125,7 @@ export function SenderPage() {
   }, []);
 
   async function doEncode() {
-    if (!src || !key) return;
+    if (!src) return;
     setErr(null);
     setBusy(true);
     setEncoded(null);
@@ -140,7 +136,7 @@ export function SenderPage() {
     if (!c || !ctx) return;
     const rgba = ctx.getImageData(0, 0, c.width, c.height).data;
     const buf = transferClone(rgba);
-    w.postMessage({ type: "encode", rgba: buf, width: c.width, height: c.height, key }, [buf]);
+    w.postMessage({ type: "encode", rgba: buf, width: c.width, height: c.height, key: DEFAULT_KEY }, [buf]);
   }
 
   function renderDisplay(
@@ -199,27 +195,6 @@ export function SenderPage() {
     }
   }
 
-  const [fsControls, setFsControls] = useState(true);
-  useEffect(() => {
-    if (!fullscreen) return;
-    let t: number | undefined;
-    const show = () => {
-      setFsControls(true);
-      clearTimeout(t);
-      t = window.setTimeout(() => setFsControls(false), 2500);
-    };
-    show();
-    const onMove = () => show();
-    const onDown = () => show();
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerdown", onDown);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerdown", onDown);
-    };
-  }, [fullscreen]);
-
   function exitFullscreen() {
     if (document.fullscreenElement) void document.exitFullscreen();
     setFullscreen(false);
@@ -239,32 +214,6 @@ export function SenderPage() {
         }}
       >
         <canvas ref={fsCanvasRef} style={{ width: "100%", height: "100%" }} />
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            padding: "10px 14px",
-            background: "rgba(0,0,0,0.55)",
-            backdropFilter: "blur(6px)",
-            fontSize: "0.85rem",
-            opacity: fsControls ? 1 : 0,
-            pointerEvents: fsControls ? "auto" : "none",
-            transition: "opacity 200ms ease",
-          }}
-        >
-          <span className="muted">
-            Point the receiver at this screen, fully zoomed, all four corners visible.
-          </span>
-          <button onClick={exitFullscreen} className="ghost">
-            Exit
-          </button>
-        </div>
         <button
           onClick={exitFullscreen}
           className="ghost"
@@ -274,9 +223,7 @@ export function SenderPage() {
             position: "absolute",
             top: 10,
             right: 12,
-            opacity: fsControls ? 0 : 0.55,
-            pointerEvents: fsControls ? "none" : "auto",
-            transition: "opacity 200ms ease",
+            opacity: 0.5,
             padding: "4px 10px",
             fontSize: "0.75rem",
           }}
@@ -344,20 +291,7 @@ export function SenderPage() {
         </section>
 
         <section className="card" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <label htmlFor="key" className="muted" style={{ display: "block", marginBottom: 6, fontSize: "0.9rem" }}>
-              Secret key
-            </label>
-            <input
-              id="key"
-              type="password"
-              value={key}
-              placeholder="shared passphrase — choose anything"
-              onChange={(e) => setKey(e.target.value)}
-            />
-          </div>
-
-          <button className="primary" disabled={busy || !src || !key} onClick={() => void doEncode()}>
+          <button className="primary" disabled={busy || !src} onClick={() => void doEncode()}>
             {busy ? "Encoding…" : encoded ? "Re-encode" : "Encode image"}
           </button>
 
@@ -391,8 +325,8 @@ export function SenderPage() {
       </div>
 
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: 14 }}>
-        The receiver needs the same key. Encoded noise looks random; the white frame is the
-        receive target.
+        Encoded noise looks random; the white frame is the receive target the receiver camera
+        locks onto.
       </p>
     </main>
   );

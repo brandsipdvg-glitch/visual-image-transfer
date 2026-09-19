@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DecodeWorker from "../lib/workers/decode.worker?worker";
 import { wrapImageData, transferClone } from "../lib/imageData";
+import { DEFAULT_KEY } from "../lib/config";
 import type {
   DecodeResultMessage,
   DecodeStageStatus,
@@ -8,7 +9,6 @@ import type {
 } from "../lib/workers/types";
 
 const CAP_WIDTH_AUTO = 1280; // per-frame loop, keeps decode worker responsive
-const CAP_WIDTH_FULL = 1920; // manual single-shot capture, max detail
 
 export function ReceiverPage() {
   const workerRef = useRef<InstanceType<typeof DecodeWorker> | null>(null);
@@ -17,21 +17,13 @@ export function ReceiverPage() {
   const captureRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef(false);
-  const queuedRef = useRef(false);
-  const sendFrameRef = useRef<(maxW: number) => void>(() => {});
   const rafRef = useRef<number>(0);
   const statusRef = useRef<DecodeStageStatus>({ stage: "scanning" });
 
-  const [key, setKey] = useState(() => localStorage.getItem("vit-key") ?? "");
   const [running, setRunning] = useState(false);
-  const [capturing, setCapturing] = useState(false);
   const [camError, setCamError] = useState<string | null>(null);
   const [status, setStatus] = useState<DecodeStageStatus>({ stage: "scanning" });
   const [result, setResult] = useState<{ width: number; height: number; quality: number; rgba: Uint8ClampedArray } | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem("vit-key", key);
-  }, [key]);
 
   const drawOverlay = useCallback(() => {
     const c = overlayRef.current;
@@ -89,8 +81,6 @@ export function ReceiverPage() {
       const d = ev.data;
       if (d.type === "busy") {
         pendingRef.current = false;
-        setCapturing(false);
-        drainQueuedCapture();
         return;
       }
       if (d.type === "decoded") {
@@ -102,15 +92,11 @@ export function ReceiverPage() {
         });
         setStatus({ stage: "decoded", width: d.width, height: d.height, quality: d.quality });
         pendingRef.current = false;
-        setCapturing(false);
-        drainQueuedCapture();
         return;
       }
       statusRef.current = d.status;
       setStatus(d.status);
       pendingRef.current = false;
-      setCapturing(false);
-      drainQueuedCapture();
     };
     w.addEventListener("message", onMsg);
     return () => {
@@ -119,15 +105,14 @@ export function ReceiverPage() {
     };
   }, []);
 
-  const sendFrame = useCallback(
-    (maxW: number) => {
+  const sendFrame = useCallback(() => {
       const v = videoRef.current;
       const cap = captureRef.current;
       const w = workerRef.current;
       if (!v || !cap || !w) return;
       if (v.readyState < 2 || !v.videoWidth) return;
 
-      const scale = Math.min(1, maxW / v.videoWidth);
+      const scale = Math.min(1, CAP_WIDTH_AUTO / v.videoWidth);
       const cw = Math.max(2, Math.round(v.videoWidth * scale));
       const ch = Math.max(2, Math.round(v.videoHeight * scale));
       if (cap.width !== cw) cap.width = cw;
@@ -138,33 +123,13 @@ export function ReceiverPage() {
       const img = ctx.getImageData(0, 0, cw, ch);
       pendingRef.current = true;
       const buf = transferClone(img.data);
-      w.postMessage({ type: "frame", rgba: buf, width: cw, height: ch, key }, [buf]);
-    },
-    [key]
-  );
-  sendFrameRef.current = sendFrame;
-
-  // A manually-requested capture that arrived while the worker was still busy
-  // gets retried once the worker reports back.
-  function drainQueuedCapture() {
-    if (queuedRef.current) {
-      queuedRef.current = false;
-      sendFrameRef.current(CAP_WIDTH_FULL);
-    }
-  }
-
-  function onManualCapture() {
-    if (!running) return;
-    setResult(null);
-    queuedRef.current = true;
-    setCapturing(true);
-    if (!pendingRef.current) sendFrame(CAP_WIDTH_FULL);
-  }
+      w.postMessage({ type: "frame", rgba: buf, width: cw, height: ch, key: DEFAULT_KEY }, [buf]);
+    }, []);
 
   useEffect(() => {
     if (!running) return;
     const loop = () => {
-      if (!queuedRef.current && !pendingRef.current) sendFrame(CAP_WIDTH_AUTO);
+      if (!pendingRef.current) sendFrame();
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -272,35 +237,15 @@ export function ReceiverPage() {
         <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Receive with camera</h2>
         <span style={{ flex: 1 }} />
         {running && (
-          <>
-            <button className="primary" disabled={capturing} onClick={onManualCapture}>
-              {capturing ? "Decoding frame…" : "Capture & decode"}
-            </button>
-            <button onClick={stopCamera} className="ghost">
-              Stop
-            </button>
-          </>
+          <button onClick={stopCamera} className="ghost">
+            Stop
+          </button>
         )}
       </header>
 
-      <div style={{ display: "flex", gap: 12, alignItems: "end" }}>
-        <div style={{ flex: 1 }}>
-          <label htmlFor="rkey" className="muted" style={{ display: "block", marginBottom: 6, fontSize: "0.9rem" }}>
-            Secret key (same as sender)
-          </label>
-          <input
-            id="rkey"
-            type="password"
-            value={key}
-            placeholder="shared passphrase"
-            onChange={(e) => setKey(e.target.value)}
-            disabled={running}
-          />
-        </div>
-        <button className="primary" disabled={running} onClick={() => void startCamera()}>
-          Start camera
-        </button>
-      </div>
+      <button className="primary" disabled={running} onClick={() => void startCamera()}>
+        {running ? "Camera on — decoding…" : "Start camera"}
+      </button>
 
       {camError && <p style={{ color: "var(--err)", margin: 0 }}>{camError}</p>}
 
@@ -394,7 +339,7 @@ export function ReceiverPage() {
             )}
             {status.stage === "failed" && (
               <div style={{ position: "absolute", bottom: 12, left: 12, fontSize: "0.8rem", color: "var(--warn)" }}>
-                Decode failed ({status.reason}) — keep frame steady, check the key.
+                Decode failed ({status.reason}) — keep frame steady and in view.
               </div>
             )}
           </>
