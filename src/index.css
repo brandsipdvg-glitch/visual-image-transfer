@@ -1,0 +1,105 @@
+:root {
+  --bg: #0b0e14;
+  --bg-2: #11151d;
+  --panel: #161b25;
+  --panel-2: #1c2230;
+  --border: #252c3a;
+  --text: #e7ecf3;
+  --text-dim: #93a0b4;
+  --accent: #4c8dff;
+  --accent-2: #7cb0ff;
+  --ok: #3ecf8e;
+  --warn: #ffc94d;
+  --err: #ff6b6b;
+  --radius: 14px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 0.55rem 1rem;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+button:hover:not(:disabled) {
+  background: var(--border);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-2);
+}
+button.ghost {
+  background: transparent;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.55rem 0.8rem;
+  width: 100%;
+}
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.4rem;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+.mono {
+  font-family: var(--mono);
+}
