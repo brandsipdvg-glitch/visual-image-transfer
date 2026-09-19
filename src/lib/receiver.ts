@@ -97,64 +97,79 @@ async function processInner(
   key: string,
   coarseQuad: P2[]
 ): Promise<{ status: FrameStatus; quad: P2[]; refined: boolean }> {
-  // Register the frame sub-pixel using the QR finder markers; fall back to the
-  // coarse white-frame quad when the markers are not found (e.g. old captures).
   const refinedQuad = refineFrameQuad(rgba, width, height, coarseQuad);
-  const toCam = canonicalToCamera(refinedQuad ?? coarseQuad);
+  // Candidate registrations: the marker-refined homography first, then the
+  // coarse detected quad. On photographs the coarse quad is occasionally the
+  // better one, so both are kept and the one that reads clean metadata wins.
+  const cams: { quad: P2[]; toCam: ((p: P2) => P2) | null }[] = [
+    { quad: refinedQuad ?? coarseQuad, toCam: refinedQuad ? canonicalToCamera(refinedQuad) : null },
+    { quad: coarseQuad, toCam: canonicalToCamera(coarseQuad) },
+  ];
   const rects = buildRects(CANONICAL);
-  const dataRectCam = rects.dataRect.map(toCam);
-  const metaRectCam = rects.metaRect.map(toCam);
 
-  // Read metadata directly from the quad (homography-sampled per-cell averages,
-  // robust against perspective distortion, blur, and block-edge bleed).
-  const lum = cellLuminanceQuad(rgba, width, height, metaRectCam, META_GRID, 4);
-  const meta = readMetaMatrix(lum);
-
-  if (!meta) {
-    return { status: { stage: "screen", quad: coarseQuad }, quad: refinedQuad ?? coarseQuad, refined: refinedQuad !== null };
+  // Collect every registration that yields a valid metadata block. Two meta
+  // samplings per quad: whole-cell (robust to small cells) and central-band
+  // (robust to sub-cell misregistration).
+  const candidates: { quad: P2[]; toCam: (p: P2) => P2; meta: NonNullable<ReturnType<typeof readMetaMatrix>> }[] = [];
+  for (const c of cams) {
+    if (!c.toCam) continue;
+    const metaRectCam = rects.metaRect.map(c.toCam);
+    for (const central of [1, 0.6]) {
+      const lum = cellLuminanceQuad(rgba, width, height, metaRectCam, META_GRID, 4, central);
+      const meta = readMetaMatrix(lum);
+      if (meta) candidates.push({ quad: c.quad, toCam: c.toCam, meta });
+    }
   }
 
-  // Register the data rect into the padded canvas and decode. Supersampling
-  // area-averages several sensor pixels per content cell, suppressing the
-  // per-pixel noise that otherwise flips a cell's quantized value.
-  const data = renderRect(
-    rgba,
-    width,
-    height,
-    dataRectCam,
-    meta.pw,
-    meta.ph,
-    { supersample: 2 }
-  );
-
-  const result: DecodeResult = await decodeImage({
-    rgba: data,
-    pw: meta.pw,
-    ph: meta.ph,
-    key,
-    checksum: meta.checksum,
-    groupCrcs: meta.groupCrcs,
-    width: meta.width,
-    height: meta.height,
-  });
-
-  if (result.ok) {
+  if (candidates.length === 0) {
     return {
-      status: {
-        stage: "decoded",
-        result: {
-          rgba: result.rgba,
-          width: result.width,
-          height: result.height,
-          quality: result.quality,
-        },
-      },
-      quad: refinedQuad ?? coarseQuad,
+      status: { stage: "screen", quad: coarseQuad },
+      quad: coarseQuad,
       refined: refinedQuad !== null,
     };
   }
+
+  // Decode with each working registration until one verifies cleanly.
+  for (const cand of candidates) {
+    const dataRectCam = rects.dataRect.map(cand.toCam);
+    const data = renderRect(
+      rgba,
+      width,
+      height,
+      dataRectCam,
+      cand.meta.pw,
+      cand.meta.ph,
+      { supersample: 2 }
+    );
+    const result: DecodeResult = await decodeImage({
+      rgba: data,
+      pw: cand.meta.pw,
+      ph: cand.meta.ph,
+      key,
+      checksum: cand.meta.checksum,
+      groupCrcs: cand.meta.groupCrcs,
+      width: cand.meta.width,
+      height: cand.meta.height,
+    });
+    if (result.ok) {
+      return {
+        status: {
+          stage: "decoded",
+          result: {
+            rgba: result.rgba,
+            width: result.width,
+            height: result.height,
+            quality: result.quality,
+          },
+        },
+        quad: cand.quad,
+        refined: refinedQuad !== null,
+      };
+    }
+  }
+
   return {
-    status: { stage: "failed", reason: result.reason },
+    status: { stage: "failed", reason: "checksum-mismatch" },
     quad: refinedQuad ?? coarseQuad,
     refined: refinedQuad !== null,
   };

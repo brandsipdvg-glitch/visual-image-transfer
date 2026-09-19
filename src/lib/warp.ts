@@ -375,16 +375,20 @@ function sampleBilinear(
 }
 
 // Average RGBA -> luminance within each of `grids`x`grids` cells of a projected
-// quadrilateral. For each cell we subsample `sub`x`sub` bilinear points at the
-// cell's normalized center region (projected through the quad homography), so
-// reads are robust to perspective distortion and block-edge bleed.
+// quadrilateral. For each cell we subsample `sub`x`sub` bilinear points inside
+// the cell (projected through the quad homography), so reads are robust to
+// perspective distortion, blur, and block-edge bleed. `central` in (0,1]
+// restricts the samples to the central `central` fraction of each cell, which
+// tolerates sub-cell misregistration at the cost of slightly noisier
+// per-cell estimates (central=1 samples the whole cell).
 export function cellLuminanceQuad(
   rgba: Uint8ClampedArray,
   w: number,
   h: number,
   quad: P2[],
   grids: number,
-  sub = 4
+  sub = 4,
+  central = 1
 ): Float32Array {
   const H = getPerspectiveTransform(
     [
@@ -397,6 +401,7 @@ export function cellLuminanceQuad(
   );
   const lum = new Float32Array(grids * grids);
   if (!H) return lum;
+  const c = Math.max(0, Math.min(1, central));
   const tmp = new Uint8ClampedArray(4);
   for (let gy = 0; gy < grids; gy++) {
     for (let gx = 0; gx < grids; gx++) {
@@ -404,8 +409,12 @@ export function cellLuminanceQuad(
       let n = 0;
       for (let sy = 0; sy < sub; sy++) {
         for (let sx = 0; sx < sub; sx++) {
-          const u = (gx + (sx + 0.5) / sub) / grids;
-          const v = (gy + (sy + 0.5) / sub) / grids;
+          const tU = (sx + 0.5) / sub;
+          const tV = (sy + 0.5) / sub;
+          const offU = 0.5 + (tU - 0.5) * c;
+          const offV = 0.5 + (tV - 0.5) * c;
+          const u = (gx + offU) / grids;
+          const v = (gy + offV) / grids;
           const p = applyH(H, { x: u, y: v });
           sampleBilinear(rgba, w, h, p.x, p.y, tmp, 0);
           sum += 0.299 * tmp[0] + 0.587 * tmp[1] + 0.114 * tmp[2];
