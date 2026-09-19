@@ -230,6 +230,8 @@ export function ReceiverPage() {
   const stageColor =
     status.stage === "decoded" ? "var(--ok)" : status.stage === "failed" ? "var(--err)" : "var(--accent-2)";
 
+  const prog = stageProgress(status);
+
   return (
     <main style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: 24, maxWidth: 860, margin: "0 auto", gap: 16 }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -329,6 +331,25 @@ export function ReceiverPage() {
                 }}
               />
               <span>{stageLabel(status)}</span>
+              <span style={{ color: stageColor, fontVariantNumeric: "tabular-nums" }}>
+                {status.stage === "decoded"
+                  ? `${Math.round(status.quality * 100)}%`
+                  : `${prog.pct}%`}
+              </span>
+            </div>
+            <div className="vit-progress">
+              <div
+                className={
+                  "vit-progress-fill" +
+                  (status.stage === "scanning" || status.stage === "failed" ? " ind" : "") +
+                  (status.stage === "failed" ? " fail" : "")
+                }
+                style={
+                  status.stage === "scanning" || status.stage === "failed"
+                    ? undefined
+                    : { width: `${prog.pct}%` }
+                }
+              />
             </div>
             {status.stage === "scanning" && (
               <div className="muted" style={{ position: "absolute", bottom: 12, left: 12, fontSize: "0.8rem" }}>
@@ -414,5 +435,23 @@ function stageLabel(s: DecodeStageStatus): string {
       return "decoded";
     case "failed":
       return "decode failed";
+  }
+}
+
+// Rough completion share per pipeline stage, shown as a thin progress bar over
+// the camera preview. scanning/failed sweep indefinitely; the rest fill in.
+function stageProgress(s: DecodeStageStatus): { pct: number } {
+  switch (s.stage) {
+    case "scanning":
+      return { pct: 4 };
+    case "screen":
+      return { pct: 35 };
+    case "reading-meta":
+      return { pct: 60 };
+    case "decoding":
+      return { pct: 85 };
+    case "decoded":
+    case "failed":
+      return { pct: 100 };
   }
 }

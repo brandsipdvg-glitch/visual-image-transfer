@@ -32,12 +32,11 @@ function downscaleGray(
   return { g: out, w: dw, h: dh };
 }
 
-// Largest connected component of pixels > thr; returns mask + bbox.
+// Largest connected component in a binary mask; returns mask + bbox.
 function largestComponent(
-  gray: Float32Array,
+  mask: Uint8Array,
   w: number,
-  h: number,
-  thr: number
+  h: number
 ): { mask: Uint8Array; area: number; minX: number; minY: number; maxX: number; maxY: number } {
   const visited = new Uint8Array(w * h);
   const stack: number[] = [];
@@ -50,7 +49,7 @@ function largestComponent(
     maxY: 0,
   };
   for (let start = 0; start < w * h; start++) {
-    if (visited[start] || gray[start] <= thr) continue;
+    if (visited[start] || !mask[start]) continue;
     stack.length = 0;
     stack.push(start);
     visited[start] = 1;
@@ -68,16 +67,70 @@ function largestComponent(
       if (px > maxX) maxX = px;
       if (py < minY) minY = py;
       if (py > maxY) maxY = py;
-      if (px > 0 && !visited[p - 1] && gray[p - 1] > thr) { visited[p - 1] = 1; stack.push(p - 1); }
-      if (px < w - 1 && !visited[p + 1] && gray[p + 1] > thr) { visited[p + 1] = 1; stack.push(p + 1); }
-      if (py > 0 && !visited[p - w] && gray[p - w] > thr) { visited[p - w] = 1; stack.push(p - w); }
-      if (py < h - 1 && !visited[p + w] && gray[p + w] > thr) { visited[p + w] = 1; stack.push(p + w); }
+      if (px > 0 && !visited[p - 1] && mask[p - 1]) { visited[p - 1] = 1; stack.push(p - 1); }
+      if (px < w - 1 && !visited[p + 1] && mask[p + 1]) { visited[p + 1] = 1; stack.push(p + 1); }
+      if (py > 0 && !visited[p - w] && mask[p - w]) { visited[p - w] = 1; stack.push(p - w); }
+      if (py < h - 1 && !visited[p + w] && mask[p + w]) { visited[p + w] = 1; stack.push(p + w); }
     }
     if (area > best.area && area >= 8) {
       best = { mask: visited.slice(0), area, minX, minY, maxX, maxY };
     }
   }
   return best;
+}
+
+// Binary mask of pixels above a threshold.
+function binaryMask(gray: Float32Array, thr: number): Uint8Array {
+  const m = new Uint8Array(gray.length);
+  for (let i = 0; i < m.length; i++) m[i] = gray[i] >= thr ? 1 : 0;
+  return m;
+}
+
+// 3x3 dilation: bridges 1-2 px gaps (screen-door/moire breakout on real cameras).
+function dilateMask(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let set = mask[y * w + x];
+      if (!set) {
+        const y0 = Math.max(0, y - 1);
+        const y1 = Math.min(h - 1, y + 1);
+        const x0 = Math.max(0, x - 1);
+        const x1 = Math.min(w - 1, x + 1);
+        for (let yy = y0; yy <= y1 && !set; yy++) {
+          for (let xx = x0; xx <= x1 && !set; xx++) {
+            if (mask[yy * w + xx]) set = 1;
+          }
+        }
+      }
+      out[y * w + x] = set;
+    }
+  }
+  return out;
+}
+
+// Robust low/high from percentiles so exposure/brightness is normalized out.
+function robustRange(gray: Float32Array): { lo: number; hi: number } {
+  const a = gray.slice(); // new Float32Array(gray) copy
+  a.sort();
+  const n = a.length;
+  return {
+    lo: a[Math.min(n - 1, (n * 0.005) | 0)],
+    hi: a[Math.min(n - 1, (n * 0.985) | 0)],
+  };
+}
+
+// In-place contrast stretch of gray to full range.
+function normalize(gray: Float32Array, lo: number, hi: number): void {
+  const span = hi - lo;
+  if (span < 4) return;
+  const inv = 255 / span;
+  for (let i = 0; i < gray.length; i++) {
+    let v = (gray[i] - lo) * inv;
+    if (v < 0) v = 0;
+    else if (v > 255) v = 255;
+    gray[i] = v;
+  }
 }
 
 // Convex hull (Andrew's monotone chain). Returns hull points (cw).
@@ -299,12 +352,20 @@ export function detectFrame(
 ): DetectedQuad | null {
   const gray = toGray(rgba, w, h);
   const ds = downscaleGray(gray, w, h, DETECT_MAX);
-  for (const thr of [235, 210, 185]) {
-    const comp = largestComponent(ds.g, ds.w, ds.h, thr);
+  // Normalize both scales with the same range so camera exposure/brightness
+  // doesn't decide whether the white frame crosses the threshold.
+  const { lo, hi } = robustRange(ds.g);
+  normalize(ds.g, lo, hi);
+  const full = gray; // full-resolution gray, parsed by reference (same values)
+  normalize(full, lo, hi);
+  for (const thr of [235, 205, 175, 145]) {
+    let mask = binaryMask(ds.g, thr);
+    mask = dilateMask(mask, ds.w, ds.h);
+    const comp = largestComponent(mask, ds.w, ds.h);
     if (comp.area < 16) continue;
     const bw = comp.maxX - comp.minX + 1;
     const bh = comp.maxY - comp.minY + 1;
-    if (bw < 0.3 * ds.w || bh < 0.3 * ds.h) continue; // too small / partial
+    if (bw < 0.25 * ds.w || bh < 0.25 * ds.h) continue; // too small / partial
     // Build hull points from the mask (sample pixels to keep it cheap).
     const pts: P2[] = [];
     const step = Math.max(1, Math.floor(Math.sqrt(comp.area / 2000)));
@@ -324,9 +385,8 @@ export function detectFrame(
     // Map corner coordinates back to full-res.
     const scaleX = w / ds.w;
     const scaleY = h / ds.h;
-    const full = quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY }));
-    // Refine at full resolution against the bright frame edges.
-    const refined = refineQuad(gray, w, h, full, thr);
+    const fullResQuad = quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY }));
+    const refined = refineQuad(full, w, h, fullResQuad, thr);
     return { quad: refined, usedThreshold: thr };
   }
   return null;
