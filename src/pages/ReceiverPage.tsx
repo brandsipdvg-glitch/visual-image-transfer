@@ -281,23 +281,29 @@ export function ReceiverPage() {
           justifyContent: "center",
         }}
       >
-        {!running ? (
-          <div style={{ textAlign: "center", color: "var(--text-dim)", padding: 20 }}>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: running ? "block" : "none",
+          }}
+        />
+        {!running && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", color: "var(--text-dim)", padding: 20 }}>
             Camera is off. Start it and point it at the sender&apos;s fullscreen frame.
           </div>
-        ) : (
+        )}
+        <canvas
+          ref={overlayRef}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+        />
+        {running && (
           <>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-            <canvas
-              ref={overlayRef}
-              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-            />
             <div
               style={{
                 position: "absolute",
